@@ -11,6 +11,11 @@ Note:
   * The file format of ``vcstool export`` uses the relative paths of the repositories as keys in YAML which avoids collisions by design.
   * ``vcstool`` has significantly fewer lines of code than ``vcstools`` including the command line tools built on top.
 
+Python 2.7 / <= 3.4 support
+---------------------------
+
+The latest version supporting Python 2.7 and Python <= 3.4 is 0.2.x from the `0.2.x branch <https://github.com/dirk-thomas/vcstool/tree/0.2.x>`_.
+
 
 How does it work?
 -----------------
@@ -45,7 +50,8 @@ Exporting and importing sets of repositories
 Vcstool can export and import all the information required to reproduce the versions of a set of repositories.
 Vcstool uses a simple `YAML <http://www.yaml.org/>`_ format to encode this information.
 This format includes a root key ``repositories`` under which each local repository is described by a dictionary keyed by its relative path.
-Each of these dictionaries contains keys ``type``, ``url``, and ``version``.
+Each of these dictionaries contains keys ``type``, ``url``, and ``version``. For git repositories only, the optional ``subpaths`` key may be used
+to specify `sparse-checkout <https://git-scm.com/docs/git-sparse-checkout>`_ directories as a list.
 If the ``version`` key is omitted the default branch is being used.
 
 This results in something similar to the following for a set of two repositories (`vcstool <https://github.com/dirk-thomas/vcstool>`_ cloned via Git and `rosinstall <http://github.com/vcstools/rosinstall>`_ checked out via Subversion):
@@ -144,12 +150,24 @@ How to install vcstool?
 =======================
 
 On Debian-based platforms the recommended method is to install the package *python3-vcstool*.
-On Ubuntu this is done using *apt-get*::
+On Ubuntu this is done using *apt-get*:
+
+If you are using `ROS <https://www.ros.org/>`_ you can get the package directly from the ROS repository::
 
   sudo sh -c 'echo "deb http://packages.ros.org/ros/ubuntu $(lsb_release -sc) main" > /etc/apt/sources.list.d/ros-latest.list'
   sudo apt-key adv --keyserver hkp://pool.sks-keyservers.net --recv-key 0xAB17C654
   sudo apt-get update
   sudo apt-get install python3-vcstool
+
+If you are not using ROS or if you want the latest release as soon as possible you can get the package from |packagecloud.io|::
+
+  curl -s https://packagecloud.io/install/repositories/dirk-thomas/vcstool/script.deb.sh | sudo bash
+  sudo apt-get update
+  sudo apt-get install python3-vcstool
+
+.. |packagecloud.io| image:: https://img.shields.io/badge/deb-packagecloud.io-844fec.svg
+  :target: https://packagecloud.io/dirk-thomas/vcstool
+  :alt: packagecloud.io
 
 On other systems, use the `PyPI <http://pypi.python.org>`_ package::
 
@@ -174,6 +192,9 @@ For *zsh* append the following line to the ``~/.zshrc`` file::
 
   source /usr/share/vcstool-completion/vcs.zsh
 
+For *fish* append the following line to the ``~/.config/fishconfig.fish`` file::
+
+  source /usr/share/vcstool-completion/vcs.fish
 
 How to contribute?
 ==================
@@ -193,5 +214,7 @@ How to try the latest changes?
 Sourcing the ``setup.sh`` file prepends the ``src`` folder to the ``PYTHONPATH`` and the ``scripts`` folder to the ``PATH``.
 Then vcstool can be used with the commands ``vcs-COMMAND`` (note the hyphen between ``vcs`` and ``command`` instead of a space).
 
-Alternatively the *develop* command from Python setuptools can be used:
-  sudo python setup.py develop
+Alternatively the ``-e/--editable`` flag of ``pip`` can be used::
+
+  # from the top level of this repo
+  pip3 install --user -e .

@@ -1,4 +1,5 @@
 import os
+from shutil import which
 import subprocess
 import sys
 import unittest
@@ -9,11 +10,23 @@ from vcstool.clients.git import GitClient  # noqa: E402
 from vcstool.util import rmtree  # noqa: E402
 
 REPOS_FILE = os.path.join(os.path.dirname(__file__), 'list.repos')
-REPOS_FILE_URL = \
-    'https://raw.githubusercontent.com/dirk-thomas/vcstool/master/test/list.repos'  # noqa: E501
+REPOS_FILE_URL = 'file://' + REPOS_FILE
 REPOS2_FILE = os.path.join(os.path.dirname(__file__), 'list2.repos')
+SPARSE_REPOS_FILE = os.path.join(os.path.dirname(__file__), 'sparse.repos')
 TEST_WORKSPACE = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), 'test_workspace')
+
+CI = os.environ.get('CI') == 'true'  # Travis CI / Github actions set: CI=true
+svn = which('svn')
+hg = which('hg')
+if svn:
+    # check if the svn executable is usable (on macOS)
+    # and not only exists to state that the program is not installed
+    try:
+        subprocess.check_call([svn, '--version'])
+    except subprocess.CalledProcessError:
+        svn = False
+sparse_git = GitClient.get_git_version() >= [2, 25, 0]
 
 
 class TestCommands(unittest.TestCase):
@@ -85,10 +98,53 @@ class TestCommands(unittest.TestCase):
         expected = get_expected_output('export_exact')
         self.assertEqual(output, expected)
 
+    @unittest.skipIf(not sparse_git, '`git` >= 2.25 required for sparse git')
+    def test_import_sparse(self):
+        workdir = os.path.join(TEST_WORKSPACE, 'import-sparse')
+        os.makedirs(workdir)
+        try:
+            output = run_command(
+                'import', ['--input', SPARSE_REPOS_FILE, '.'],
+                subfolder='import-sparse')
+            # the actual output contains absolute paths
+            output = output.replace(
+                b'repository in ' + workdir.encode() + b'/',
+                b'repository in ./')
+            expected = get_expected_output('import_sparse')
+            assert (output == expected)
+
+            # directories match sparse-checkout list
+            repos = next(os.walk(workdir))[1]
+            for repo in repos:
+                git_dir = os.path.join(workdir, repo, '.git')
+                cmd = ['git', '--git-dir={}'.format(git_dir),
+                       'sparse-checkout', 'list']
+                output = subprocess.check_output(
+                    cmd, stderr=subprocess.STDOUT,
+                    cwd=os.path.join(workdir, repo))
+
+                git_patterns = [pattern.decode('utf-8') for pattern in
+                                output.splitlines()]
+                local_directories = next(
+                    os.walk(os.path.join(workdir, repo)))[1]
+                local_directories.remove('.git')
+
+                self.assertEqual(git_patterns, local_directories,
+                                 "Local directories do not match sparse "
+                                 "pattern for {}".format(repo))
+        finally:
+            rmtree(workdir)
+
     def test_log(self):
         output = run_command(
             'log', args=['--limit', '2'], subfolder='immutable')
         expected = get_expected_output('log_limit')
+        self.assertEqual(output, expected)
+
+    def test_log_merge_only(self):
+        output = run_command(
+            'log', args=['--merge-only'], subfolder='immutable/tag')
+        expected = get_expected_output('log_merges_only')
         self.assertEqual(output, expected)
 
     def test_pull(self):
@@ -118,10 +174,7 @@ invocation.
         self.assertEqual(output, expected)
 
     def test_pull_api(self):
-        try:
-            from cStringIO import StringIO
-        except ImportError:
-            from io import StringIO
+        from io import StringIO
         from vcstool.commands.pull import main
         stdout_stderr = StringIO()
 
@@ -256,10 +309,14 @@ invocation.
                 b'repository in ' + workdir.encode() + b'/',
                 b'repository in ./')
             expected = get_expected_output('import_shallow')
+            # git 2.28+ gives hints if no default branch is specified
+            expected_2_28 = get_expected_output(
+                'import_shallow_default_branch_hints')
             # newer git versions don't append ... after the commit hash
             assert (
                 output == expected or
-                output == expected.replace(b'... ', b' '))
+                output == expected.replace(b'... ', b' ') or
+                output == expected_2_28)
 
             # check that repository history has only one commit
             output = subprocess.check_output(
@@ -295,13 +352,16 @@ invocation.
         self.assertEqual(output, expected)
 
         output = run_command(
-            'validate', ['--input', REPOS2_FILE])
-        expected = get_expected_output('validate2')
-        self.assertEqual(output, expected)
-
-        output = run_command(
             'validate', ['--hide-empty', '--input', REPOS_FILE])
         expected = get_expected_output('validate_hide')
+        self.assertEqual(output, expected)
+
+    @unittest.skipIf(not svn and not CI, '`svn` was not found')
+    @unittest.skipIf(not hg and not CI, '`hg` was not found')
+    def test_validate_svn_and_hg(self):
+        output = run_command(
+            'validate', ['--input', REPOS2_FILE])
+        expected = get_expected_output('validate2')
         self.assertEqual(output, expected)
 
     def test_remote(self):

@@ -1,10 +1,10 @@
 import os
+from shutil import which
 import subprocess
 
 from vcstool.executor import USE_COLOR
 
 from .vcs_base import VcsClientBase
-from .vcs_base import which
 from ..util import rmtree
 
 
@@ -21,7 +21,7 @@ class GitClient(VcsClientBase):
             output = subprocess.check_output(['git', '--version'])
             prefix = b'git version '
             assert output.startswith(prefix)
-            output = output[len(prefix):].rstrip()
+            output = output[len(prefix):].split(maxsplit=1)[0]
             cls._git_version = [
                 int(x) for x in output.split(b'.') if x != b'windows']
         return cls._git_version
@@ -61,6 +61,15 @@ class GitClient(VcsClientBase):
 
     def export(self, command):
         self._check_executable()
+
+        subpaths = None
+
+        if self.get_git_version() >= [2, 25] and self._check_sparse():
+            result_patterns = self._get_sparse_patterns()
+            if result_patterns['returncode']:
+                return result_patterns
+            subpaths = list(result_patterns['output'])
+
         exact = command.exact
         if not exact:
             # determine if a specific branch is checked out or ec is detached
@@ -105,6 +114,11 @@ class GitClient(VcsClientBase):
                 return result_url
             url = result_url['output']
 
+            export_data = {'url': url, 'version': branch_name}
+
+            if subpaths is not None:
+                export_data['subpaths'] = subpaths
+
             # the result is the remote url and the branch name
             return {
                 'cmd': ' && '.join([
@@ -113,7 +127,7 @@ class GitClient(VcsClientBase):
                 'cwd': self.path,
                 'output': '\n'.join([url, branch_name]),
                 'returncode': 0,
-                'export_data': {'url': url, 'version': branch_name}
+                'export_data': export_data
             }
 
         else:
@@ -197,13 +211,18 @@ class GitClient(VcsClientBase):
                 url = result_url['output']
                 cmds.append(result_url['cmd'])
 
+                export_data = {'url': url, 'version': ref}
+
+                if subpaths is not None:
+                    export_data['subpaths'] = subpaths
+
                 # the result is the remote url and the hash/tag
                 return {
                     'cmd': ' && '.join(cmds),
                     'cwd': self.path,
                     'output': '\n'.join([url, ref]),
                     'returncode': 0,
-                    'export_data': {'url': url, 'version': ref}
+                    'export_data': export_data
                 }
 
             return {
@@ -231,15 +250,31 @@ class GitClient(VcsClientBase):
                 'returncode': 1
             }
 
+        if command.subpaths and self.get_git_version() < [2, 25, 0]:
+            return {
+                'cmd': '',
+                'cwd': self.path,
+                'output': "Sparse-checkout requires git >= 2.25",
+                'returncode': 1
+            }
+
         self._check_executable()
+
+        sparse = command.subpaths is not None
+
         if GitClient.is_repository(self.path):
             # verify that existing repository is the same
             result_urls = self._get_remote_urls()
+            result_patterns = None
+            if sparse:
+                result_patterns = self._get_sparse_patterns()
             if result_urls['returncode']:
                 return result_urls
             for url, remote in result_urls['output']:
                 if url == command.url:
-                    break
+                    if (result_patterns is None) or \
+                            (result_patterns['output'] == command.subpaths):
+                        break
             else:
                 if command.skip_existing:
                     return {
@@ -314,7 +349,7 @@ class GitClient(VcsClientBase):
             # fetch updates for existing repo
             cmd_fetch = [GitClient._executable, 'fetch', remote]
             if command.shallow:
-                result_version_type = self._check_version_type(
+                result_version_type, version_name = self._check_version_type(
                     command.url, checkout_version)
                 if result_version_type['returncode']:
                     return result_version_type
@@ -322,46 +357,63 @@ class GitClient(VcsClientBase):
                 if version_type == 'branch':
                     cmd_fetch.append(
                         'refs/heads/%s:refs/remotes/%s/%s' %
-                        (checkout_version, remote, checkout_version))
+                        (version_name, remote, version_name))
                 elif version_type == 'hash':
                     cmd_fetch.append(checkout_version)
                 elif version_type == 'tag':
                     cmd_fetch.append(
                         '+refs/tags/%s:refs/tags/%s' %
-                        (checkout_version, checkout_version))
+                        (version_name, version_name))
                 else:
                     assert False
                 cmd_fetch += ['--depth', '1']
+            else:
+                version_type = None
             result_fetch = self._run_command(cmd_fetch, retry=command.retry)
             if result_fetch['returncode']:
                 return result_fetch
             cmd = result_fetch['cmd']
             output = result_fetch['output']
 
+            if not command.shallow and checkout_version is not None:
+                if checkout_version.startswith('heads/'):
+                    version_name = checkout_version[6:]
+                    version_type = 'branch'
+                elif checkout_version.startswith('tags/'):
+                    version_name = checkout_version[5:]
+                    version_type = 'tag'
+                else:
+                    version_type = None
             # ensure that a tracking branch exists which can be checked out
-            if command.shallow and version_type == 'branch':
+            if version_type == 'branch':
                 cmd_show_ref = [
                     GitClient._executable, 'show-ref',
-                    'refs/heads/%s' % checkout_version]
+                    'refs/heads/%s' % version_name]
                 result_show_ref = self._run_command(cmd_show_ref)
                 if result_show_ref['returncode']:
+                    if not command.shallow:
+                        result_show_ref['output'] = \
+                            "Could not find branch '%s': %s" % \
+                            (version_name, result_show_ref['output'])
+                        return result_show_ref
                     # creating tracking branch
                     cmd_branch = [
-                        GitClient._executable, 'branch', checkout_version,
-                        '%s/%s' % (remote, checkout_version)]
+                        GitClient._executable, 'branch', version_name,
+                        '%s/%s' % (remote, version_name)]
                     result_branch = self._run_command(cmd_branch)
                     if result_branch['returncode']:
                         result_branch['output'] = \
                             "Could not create branch '%s': %s" % \
-                            (checkout_version, result_branch['output'])
+                            (version_name, result_branch['output'])
                         return result_branch
                     cmd += ' && ' + ' '.join(cmd_branch)
                     output = '\n'.join([output, result_branch['output']])
+                checkout_version = version_name
 
         else:
             version_type = None
             if command.version:
-                result_version_type = self._check_version_type(
+                result_version_type, version_name = self._check_version_type(
                     command.url, command.version)
                 if result_version_type['returncode']:
                     return result_version_type
@@ -370,10 +422,12 @@ class GitClient(VcsClientBase):
             if not command.shallow or version_type in (None, 'branch'):
                 cmd_clone = [GitClient._executable, 'clone', command.url, '.']
                 if version_type == 'branch':
-                    cmd_clone += ['-b', command.version]
+                    cmd_clone += ['-b', version_name]
                     checkout_version = None
                 else:
                     checkout_version = command.version
+                if command.subpaths:
+                    cmd_clone += ['--no-checkout']
                 if command.shallow:
                     cmd_clone += ['--depth', '1']
                 result_clone = self._run_command(
@@ -409,7 +463,7 @@ class GitClient(VcsClientBase):
                 elif version_type == 'tag':
                     cmd_fetch.append(
                         'refs/tags/%s:refs/tags/%s' %
-                        (command.version, command.version))
+                        (version_name, version_name))
                 else:
                     assert False
                 cmd_fetch += ['--depth', '1']
@@ -421,6 +475,28 @@ class GitClient(VcsClientBase):
                 output = '\n'.join([output, result_fetch['output']])
 
                 checkout_version = command.version
+
+        if sparse:
+            # Initialize as sparse-checkout and set patterns
+            cmd_sparse_init = [GitClient._executable, 'sparse-checkout',
+                               'init', '--cone']
+            result_sparse_init = self._run_command(
+                    cmd_sparse_init, retry=command.retry)
+            if result_sparse_init['returncode']:
+                result_sparse_init['output'] = \
+                    "Could not init sparse checkout for '%s': %s" % \
+                    (command.url, result_sparse_init['output'])
+                return result_sparse_init
+            cmd_set_sparse = [GitClient._executable, 'sparse-checkout',
+                              'set'] + list(command.subpaths)
+            result_set_sparse = self._run_command(
+                    cmd_set_sparse, retry=command.retry)
+            if result_set_sparse['returncode']:
+                result_set_sparse['output'] = \
+                    "Could not set sparse checkout patterns for" \
+                    " '%s': %s" % \
+                    (command.url, result_set_sparse['output'])
+                return result_set_sparse
 
         if checkout_version:
             cmd_checkout = [
@@ -438,9 +514,24 @@ class GitClient(VcsClientBase):
             cmd += ' && ' + ' '.join(cmd_checkout)
             output = '\n'.join([output, result_checkout['output']])
 
+        if sparse:
+            # 18.04/Git 2.32.0 required checking out branch after
+            # setting subpaths
+            cmd_checkout = [GitClient._executable, 'checkout']
+            result_checkout = self._run_command(cmd_checkout)
+            if result_checkout['returncode']:
+                result_checkout['output'] = \
+                    "Failed default checkout: %s" % \
+                    (result_checkout['output'])
+                return result_checkout
+            result_check_subpaths = self._check_subpaths(command)
+            if result_check_subpaths['returncode']:
+                return result_check_subpaths
+
         if command.recursive:
             cmd_submodule = [
-                GitClient._executable, 'submodule', 'update', '--init']
+                GitClient._executable, 'submodule', 'update', '--init',
+                '--recursive']
             result_submodule = self._run_command(cmd_submodule)
             if result_submodule['returncode']:
                 result_submodule['output'] = \
@@ -479,16 +570,47 @@ class GitClient(VcsClientBase):
             'returncode': 0 if remote_urls else 1
         }
 
+    def _get_sparse_patterns(self):
+        cmd = [GitClient._executable, 'sparse-checkout', 'list']
+        result = self._run_command(cmd)
+        if result['returncode']:
+            result['output'] = 'Could not list sparse patterns: %s' % \
+                result['output']
+            return result, None
+        patterns = result['output'].split()
+
+        return {
+            'cmd': result['cmd'],
+            'cwd': self.path,
+            'output': set(patterns),
+            'returncode': 0
+        }
+
     def _check_version_type(self, url, version):
+        # check if version starts with heads/ or tags/
+        prefixes = {
+            'heads/': 'branch',
+            'tags/': 'tag',
+        }
+        for prefix, version_type in prefixes.items():
+            if version.startswith(prefix):
+                return {
+                    'cmd': None,
+                    'cwd': None,
+                    'output': None,
+                    'returncode': 0,
+                    'version_type': version_type,
+                }, version[len(prefix):]
+
         cmd = [GitClient._executable, 'ls-remote', url, version]
         result = self._run_command(cmd)
         if result['returncode']:
             result['output'] = 'Could not determine ref type of version: ' + \
                 result['output']
-            return result
+            return result, None
         if not result['output']:
             result['version_type'] = 'hash'
-            return result
+            return result, None
 
         refs = {}
         for hash_, ref in self._get_hash_ref_tuples(result['output']):
@@ -501,14 +623,15 @@ class GitClient(VcsClientBase):
                 result['returncode'] = 1
                 result['output'] = 'The version ref is a branch as well as ' \
                     'tag but with different hashes'
-                return result
+                return result, None
         if tag_ref in refs:
             result['version_type'] = 'tag'
         elif branch_ref in refs:
             result['version_type'] = 'branch'
         else:
             result['version_type'] = 'hash'
-        return result
+        return result, \
+            version if result['version_type'] in ('tag', 'branch') else None
 
     def log(self, command):
         self._check_executable()
@@ -539,6 +662,8 @@ class GitClient(VcsClientBase):
             cmd = [GitClient._executable, 'log', '%s..' % result_tag['output']]
         else:
             cmd = [GitClient._executable, 'log']
+        if command.merge_only:
+            cmd += ['--merges']
         cmd += ['--decorate']
         if command.limit != 0:
             cmd += ['-%d' % command.limit]
@@ -642,6 +767,8 @@ class GitClient(VcsClientBase):
         if command.version:
             hashes = []
             refs = []
+            tags = []
+            branches = []
 
             for hash_and_ref in self._get_hash_ref_tuples(
                 result_ls_remote['output']
@@ -651,37 +778,59 @@ class GitClient(VcsClientBase):
                 # ignore pull request refs
                 if not hash_and_ref[1].startswith('refs/pull/'):
                     if hash_and_ref[1].startswith('refs/tags/'):
-                        refs.append(hash_and_ref[1][10:])
+                        tags.append(hash_and_ref[1][10:])
                     elif hash_and_ref[1].startswith('refs/heads/'):
-                        refs.append(hash_and_ref[1][11:])
+                        branches.append(hash_and_ref[1][11:])
                     else:
                         refs.append(hash_and_ref[1])
 
-            # test for refs first
-            ref_found = command.version in refs
-
-            if not ref_found:
+            if command.version in refs:
+                version_type = 'ref'
+                version_name = command.version
+            elif (
+                command.version.startswith('heads/') and
+                command.version[6:] in branches
+            ):
+                version_type = 'branch'
+                version_name = command.version[6:]
+            elif (
+                command.version.startswith('tags/') and
+                command.version[5:] in tags
+            ):
+                version_type = 'tag'
+                version_name = command.version[5:]
+            elif (
+                command.version in branches and
+                command.version not in tags
+            ):
+                version_type = 'branch'
+                version_name = command.version
+            elif (
+                command.version in tags and
+                command.version not in branches
+            ):
+                version_type = 'tag'
+                version_name = command.version
+            else:
                 for _hash in hashes:
                     if _hash.startswith(command.version):
-                        ref_found = True
                         break
+                else:
+                    cmd = result_ls_remote['cmd']
+                    output = "Found git repository '%s' but " % command.url + \
+                        'unable to verify non-branch / non-tag ref ' + \
+                        "'%s' without cloning the repo" % command.version
 
-            if not ref_found:
-                cmd = result_ls_remote['cmd']
-                output = "Found git repository '%s' but " % command.url + \
-                    'unable to verify non-branch / non-tag ref ' + \
-                    "'%s' without cloning the repo" % command.version
+                    return {
+                        'cmd': cmd,
+                        'cwd': self.path,
+                        'output': output,
+                        'returncode': 0
+                    }
 
-                return {
-                    'cmd': cmd,
-                    'cwd': self.path,
-                    'output': output,
-                    'returncode': 0
-                }
-            else:
-                cmd = result_ls_remote['cmd']
-                output = "Found git repository '%s' with ref '%s'" % \
-                    (command.url, command.version)
+            cmd = result_ls_remote['cmd']
+            output = "Found git repository '%s' with %s '%s'" % \
+                (command.url, version_type, version_name)
         else:
             cmd = result_ls_remote['cmd']
             output = "Found git repository '%s' with default branch" % \
@@ -710,6 +859,34 @@ class GitClient(VcsClientBase):
     def _check_executable(self):
         assert GitClient._executable is not None, \
             "Could not find 'git' executable"
+
+    def _check_sparse(self):
+        cmd = [GitClient._executable, 'config', '--get',
+               'core.sparsecheckout']
+        result = self._run_command(cmd)
+        return result['output'] == 'true'
+
+    def _check_subpaths(self, command):
+        missing_patterns = []
+        for pattern in command.subpaths:
+            if not os.path.exists(os.path.join(self.path, pattern)):
+                missing_patterns.append(pattern)
+        if len(missing_patterns) > 0:
+            return {
+                'cmd': '',
+                'cwd': self.path,
+                'output': "Could not find sparse-checkout pattern(s) in "
+                          "{}: {}. Ensure subpath(s) are correctly "
+                          "specified and exist in specified version."
+                          "".format(command.url, missing_patterns),
+                'returncode': 1
+            }
+        return {
+            'cmd': '',
+            'cwd': self.path,
+            'output': "",
+            'returncode': 0
+        }
 
     def _get_hash_ref_tuples(self, ls_remote_output):
         tuples = []

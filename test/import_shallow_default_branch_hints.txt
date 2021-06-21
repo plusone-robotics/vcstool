@@ -1,6 +1,19 @@
 ......
 === ./immutable/hash (git) ===
-Cloning into '.'...
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Initialized empty Git repository in ./immutable/hash/.git/
+
+From https://github.com/dirk-thomas/vcstool
+ * branch            377d5b3d03c212f015cc832fdb368f4534d0d583 -> FETCH_HEAD
 Note: switching to '377d5b3d03c212f015cc832fdb368f4534d0d583'.
 
 You are in 'detached HEAD' state. You can look around, make experimental
@@ -18,13 +31,26 @@ Or undo this operation with:
 
 Turn off this advice by setting config variable advice.detachedHead to false
 
-HEAD is now at 377d5b3... update changelog
+HEAD is now at 377d5b3 update changelog
 === ./immutable/hash_tar (tar) ===
 Downloaded tarball from 'https://github.com/dirk-thomas/vcstool/archive/377d5b3d03c212f015cc832fdb368f4534d0d583.tar.gz' and unpacked it
 === ./immutable/hash_zip (zip) ===
 Downloaded zipfile from 'https://github.com/dirk-thomas/vcstool/archive/377d5b3d03c212f015cc832fdb368f4534d0d583.zip' and unpacked it
 === ./immutable/tag (git) ===
-Cloning into '.'...
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Initialized empty Git repository in ./immutable/tag/.git/
+
+From https://github.com/dirk-thomas/vcstool
+ * [new tag]         0.1.27     -> 0.1.27
 Note: switching to 'tags/0.1.27'.
 
 You are in 'detached HEAD' state. You can look around, make experimental
@@ -42,7 +68,7 @@ Or undo this operation with:
 
 Turn off this advice by setting config variable advice.detachedHead to false
 
-HEAD is now at bf9ca56... 0.1.27
+HEAD is now at bf9ca56 0.1.27
 === ./vcstool (git) ===
 Cloning into '.'...
 === ./without_version (git) ===
