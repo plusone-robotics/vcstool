@@ -86,8 +86,8 @@ def get_entrypoint(command):
                 file=sys.stderr)
         return None
 
-    return entry_points(
-        'vcstool', 'console_scripts', 'vcs-' + commands[0]).names
+    return entry_points().select(group='console_scripts',
+                                 name=f'vcs-{command}')[0].load()
 
 
 def get_parser_with_command_only():
