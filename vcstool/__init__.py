@@ -1,3 +1,3 @@
 from .clients import vcstool_clients  # noqa
 
-__version__ = '0.2.0+por'
+__version__ = '0.3.0+por'
