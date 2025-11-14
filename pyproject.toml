@@ -21,7 +21,7 @@ classifiers = [
     'Topic :: Software Development :: Version Control',
     'Topic :: Utilities'
 ]
-dependencies ['pyyaml']
+dependencies = ['pyyaml']
 
 [project.urls]
 "Homepage" = 'https://github.com/plusone-robotics/vcstool'
