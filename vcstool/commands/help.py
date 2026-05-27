@@ -16,7 +16,7 @@ def main(args=None, stdout=None, stderr=None):
 
     # help for a specific command
     if ns.command:
-        # relay help request foe specific command
+        # relay help request for specific command
         entrypoint = get_entrypoint(ns.command)
         if not entrypoint:
             return 1
